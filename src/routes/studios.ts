@@ -4,7 +4,7 @@ import { collections } from "../config/db";
 import { requireAuth } from "../middleware/auth";
 import { ACTIVE_STATUSES, CATEGORIES, type StudioDoc } from "../types";
 import { asyncHandler, earliestBookableDate, escapeRegex, HttpError, toObjectId } from "../utils/http";
-import { dateString, studioCreateSchema, studioUpdateSchema } from "../utils/validators";
+import { dateString, reviewSchema, studioCreateSchema, studioUpdateSchema } from "../utils/validators";
 
 const router = Router();
 
@@ -75,13 +75,13 @@ router.get(
   }),
 );
 
-// GET /api/studios/mine — listings owned by the logged-in host
+// GET /api/studios/mine — listings owned by the logged-in user (matched on ownerEmail)
 router.get(
   "/mine",
   requireAuth,
   asyncHandler(async (req, res) => {
     const { studios } = await collections();
-    const items = await studios.find({ hostId: req.user!.id }).sort({ createdAt: -1 }).toArray();
+    const items = await studios.find({ ownerEmail: req.user!.email }).sort({ createdAt: -1 }).toArray();
     res.json(items);
   }),
 );
@@ -134,8 +134,8 @@ router.post(
     const doc: StudioDoc = {
       ...data,
       hostId: req.user!.id,
-      hostName: req.user!.name,
-      hostEmail: req.user!.email,
+      ownerName: req.user!.name,
+      ownerEmail: req.user!.email,
       rating: 0,
       reviewCount: 0,
       createdAt: now,
@@ -192,9 +192,72 @@ router.delete(
         `This studio has ${upcoming} upcoming booking${upcoming > 1 ? "s" : ""}. Cancel or decline them before deleting.`,
       );
     }
-    await studios.deleteOne({ _id: studio._id });
+    const { reviews, wishlists } = await collections();
+    await Promise.all([studios.deleteOne({ _id: studio._id }), reviews.deleteMany({ studioId: req.params.id }),
+      wishlists.deleteMany({ studioId: req.params.id }),
+    ]);
     res.json({ message: "Studio deleted" });
   }),
 );
+
+// GET /api/studios/:id/reviews — newest first
+router.get(
+  "/:id/reviews",
+  asyncHandler(async (req, res) => {
+    toObjectId(req.params.id);
+    const { reviews } = await collections();
+    const items = await reviews.find({ studioId: req.params.id }).sort({ createdAt: -1 }).limit(50).toArray();
+    res.json(items);
+  }),
+);
+
+// POST /api/studios/:id/reviews — guests with a confirmed or completed booking can review (one per studio, editable)
+router.post(
+  "/:id/reviews",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const { rating, comment } = reviewSchema.parse(req.body);
+    const user = req.user!;
+    const { studios, bookings, reviews } = await collections();
+    const studio = await studios.findOne({ _id: toObjectId(req.params.id) });
+    if (!studio) throw new HttpError(404, "This studio no longer exists.");
+    if (studio.hostId === user.id) throw new HttpError(400, "You can't review your own studio.");
+
+    const booked = await bookings.findOne({
+      studioId: req.params.id,
+      guestId: user.id,
+      status: { $in: ["confirmed", "completed"] },
+    });
+    if (!booked) throw new HttpError(403, "Only creators with a confirmed booking at this studio can leave a review.");
+
+    const now = new Date();
+    const review = await reviews.findOneAndUpdate(
+      { studioId: req.params.id, userId: user.id },
+      {
+        $set: { rating, comment, userName: user.name, userImage: user.image ?? null, updatedAt: now },
+        $setOnInsert: { studioId: req.params.id, userId: user.id, createdAt: now },
+      },
+      { upsert: true, returnDocument: "after" },
+    );
+
+    await refreshRating(req.params.id);
+    res.status(201).json(review);
+  }),
+);
+
+/** Recalculates a studio's average rating and review count from its reviews. */
+export async function refreshRating(studioId: string) {
+  const { studios, reviews } = await collections();
+  const [agg] = await reviews
+    .aggregate<{ avg: number; count: number }>([
+      { $match: { studioId } },
+      { $group: { _id: null, avg: { $avg: "$rating" }, count: { $sum: 1 } } },
+    ])
+    .toArray();
+  await studios.updateOne(
+    { _id: toObjectId(studioId) },
+    { $set: { rating: agg ? Math.round(agg.avg * 10) / 10 : 0, reviewCount: agg?.count ?? 0 } },
+  );
+}
 
 export default router;
