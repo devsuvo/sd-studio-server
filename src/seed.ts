@@ -7,7 +7,8 @@
  */
 import { collections, getDb } from "./config/db";
 import { env } from "./config/env";
-import type { BookingDoc, StudioDoc } from "./types";
+import { refreshRating } from "./routes/studios";
+import type { BookingDoc, ReviewDoc, StudioDoc } from "./types";
 import { quote } from "./utils/pricing";
 
 const img = (id: string) => `https://images.unsplash.com/photo-${id}?auto=format&fit=crop&w=1400&q=80`;
@@ -22,23 +23,24 @@ type Account = (typeof ACCOUNTS)[keyof typeof ACCOUNTS];
 
 async function ensureUser(account: Account): Promise<string> {
   const headers = { "Content-Type": "application/json", Origin: env.clientUrl };
-  const signUp = await fetch(`${env.clientUrl}/api/auth/sign-up/email`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(account),
-  });
-  if (signUp.ok) return ((await signUp.json()) as { user: { id: string } }).user.id;
-
+  // Sign in first: a sign-up for an existing email may not return the real user id.
   const signIn = await fetch(`${env.clientUrl}/api/auth/sign-in/email`, {
     method: "POST",
     headers,
     body: JSON.stringify({ email: account.email, password: account.password }),
   });
-  if (!signIn.ok) throw new Error(`Could not create or sign in ${account.email}: ${await signIn.text()}`);
-  return ((await signIn.json()) as { user: { id: string } }).user.id;
+  if (signIn.ok) return ((await signIn.json()) as { user: { id: string } }).user.id;
+
+  const signUp = await fetch(`${env.clientUrl}/api/auth/sign-up/email`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(account),
+  });
+  if (!signUp.ok) throw new Error(`Could not create or sign in ${account.email}: ${await signUp.text()}`);
+  return ((await signUp.json()) as { user: { id: string } }).user.id;
 }
 
-type StudioSeed = Omit<StudioDoc, "hostId" | "hostName" | "hostEmail" | "createdAt" | "updatedAt">;
+type StudioSeed = Omit<StudioDoc, "hostId" | "ownerName" | "ownerEmail" | "createdAt" | "updatedAt">;
 
 const STUDIOS: (StudioSeed & { owner: "host" | "host2" })[] = [
   {
@@ -50,7 +52,7 @@ const STUDIOS: (StudioSeed & { owner: "host" | "host2" })[] = [
     city: "Dhaka",
     address: "House 42, Road 11, Banani",
     hourlyRate: 45,
-    cleaningFee: 15,
+    securityDeposit: 15,
     capacity: 12,
     sizeSqft: 1800,
     minHours: 2,
@@ -72,7 +74,7 @@ const STUDIOS: (StudioSeed & { owner: "host" | "host2" })[] = [
     city: "Dhaka",
     address: "Level 5, 27 Gulshan Avenue",
     hourlyRate: 35,
-    cleaningFee: 0,
+    securityDeposit: 0,
     capacity: 6,
     sizeSqft: 420,
     minHours: 1,
@@ -94,7 +96,7 @@ const STUDIOS: (StudioSeed & { owner: "host" | "host2" })[] = [
     city: "Chattogram",
     address: "18 CDA Avenue, Nasirabad",
     hourlyRate: 60,
-    cleaningFee: 10,
+    securityDeposit: 10,
     capacity: 8,
     sizeSqft: 950,
     minHours: 3,
@@ -116,7 +118,7 @@ const STUDIOS: (StudioSeed & { owner: "host" | "host2" })[] = [
     city: "Dhaka",
     address: "Plot 7, Tejgaon Industrial Area",
     hourlyRate: 120,
-    cleaningFee: 40,
+    securityDeposit: 40,
     capacity: 40,
     sizeSqft: 4000,
     minHours: 4,
@@ -138,7 +140,7 @@ const STUDIOS: (StudioSeed & { owner: "host" | "host2" })[] = [
     city: "Sylhet",
     address: "Zindabazar Main Road, Floor 2",
     hourlyRate: 18,
-    cleaningFee: 5,
+    securityDeposit: 5,
     capacity: 10,
     sizeSqft: 700,
     minHours: 2,
@@ -160,7 +162,7 @@ const STUDIOS: (StudioSeed & { owner: "host" | "host2" })[] = [
     city: "Dhaka",
     address: "Road 27, Dhanmondi",
     hourlyRate: 25,
-    cleaningFee: 0,
+    securityDeposit: 0,
     capacity: 25,
     sizeSqft: 1500,
     minHours: 1,
@@ -182,7 +184,7 @@ const STUDIOS: (StudioSeed & { owner: "host" | "host2" })[] = [
     city: "Chattogram",
     address: "GEC Circle, Block C",
     hourlyRate: 30,
-    cleaningFee: 0,
+    securityDeposit: 0,
     capacity: 5,
     sizeSqft: 500,
     minHours: 1,
@@ -204,7 +206,7 @@ const STUDIOS: (StudioSeed & { owner: "host" | "host2" })[] = [
     city: "Sylhet",
     address: "Amberkhana Point, Suite 3B",
     hourlyRate: 22,
-    cleaningFee: 0,
+    securityDeposit: 0,
     capacity: 3,
     sizeSqft: 260,
     minHours: 1,
@@ -226,7 +228,7 @@ const STUDIOS: (StudioSeed & { owner: "host" | "host2" })[] = [
     city: "Rajshahi",
     address: "Shaheb Bazar Road, Floor 4",
     hourlyRate: 40,
-    cleaningFee: 10,
+    securityDeposit: 10,
     capacity: 8,
     sizeSqft: 800,
     minHours: 2,
@@ -254,12 +256,23 @@ async function main() {
   const { studios, bookings } = await collections();
   await studios.deleteMany({ hostId: { $in: [ids.host, ids.host2] } });
   await bookings.deleteMany({ $or: [{ guestId: ids.guest }, { hostId: { $in: [ids.host, ids.host2] } }] });
+  const { reviews } = await collections();
+  await reviews.deleteMany({ userId: { $in: [ids.guest, ids.host, ids.host2] } });
 
   const now = Date.now();
   const docs: StudioDoc[] = STUDIOS.map(({ owner, ...s }, i) => {
     const account = ACCOUNTS[owner];
     const created = new Date(now - i * 36 * 60 * 60 * 1000);
-    return { ...s, hostId: ids[owner], hostName: account.name, hostEmail: account.email, createdAt: created, updatedAt: created };
+    const deposits = [100, 50, 150, 300, 40, 60, 75, 50, 80];
+    return {
+      ...s,
+      securityDeposit: deposits[i] ?? 50,
+      hostId: ids[owner],
+      ownerName: account.name,
+      ownerEmail: account.email,
+      createdAt: created,
+      updatedAt: created,
+    };
   });
   const { insertedIds } = await studios.insertMany(docs);
   console.log(`Inserted ${docs.length} studios`);
@@ -287,7 +300,7 @@ async function main() {
       startHour,
       endHour,
       hours: endHour - startHour,
-      pricing: quote(s.hourlyRate, s.cleaningFee, endHour - startHour),
+      pricing: quote(s.hourlyRate, s.securityDeposit, endHour - startHour),
       note,
       status,
       createdAt: created,
@@ -306,6 +319,33 @@ async function main() {
     makeBooking(0, host2AsGuest, day(1), 14, 17, "confirmed"),
   ]);
   console.log("Inserted demo bookings");
+
+  // Reviews come from the other demo accounts (nobody reviews their own studio).
+  const REVIEW_TEXT: [number, string][] = [
+    [5, "Everything was set up when we arrived and the light was exactly as described. We finished the shoot an hour early."],
+    [4, "Great space and a responsive host. Parking was a little tight, but the room itself was perfect for our crew."],
+    [5, "Clean, quiet and well equipped. The gear list was accurate down to the last stand, which made planning easy."],
+    [4, "Good value for the hourly rate. We'd book it again for our next project."],
+  ];
+  const reviewers = [
+    { id: ids.guest, name: ACCOUNTS.guest.name },
+    { id: ids.host, name: ACCOUNTS.host.name },
+    { id: ids.host2, name: ACCOUNTS.host2.name },
+  ];
+  const reviewDocs: ReviewDoc[] = [];
+  docs.forEach((studio, i) => {
+    const studioId = insertedIds[i].toString();
+    reviewers
+      .filter((r) => r.id !== studio.hostId)
+      .forEach((r, j) => {
+        const [rating, comment] = REVIEW_TEXT[(i + j) % REVIEW_TEXT.length];
+        const at = new Date(now - (i * 3 + j + 2) * 86_400_000);
+        reviewDocs.push({ studioId, userId: r.id, userName: r.name, userImage: null, rating, comment, createdAt: at, updatedAt: at });
+      });
+  });
+  await reviews.insertMany(reviewDocs);
+  await Promise.all(Object.values(insertedIds).map((id) => refreshRating(id.toString())));
+  console.log(`Inserted ${reviewDocs.length} reviews`);
 }
 
 main()
