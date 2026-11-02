@@ -19,7 +19,7 @@ export interface StudioDoc {
   city: string;
   address: string;
   hourlyRate: number;
-  cleaningFee: number;
+  securityDeposit: number;
   capacity: number;
   sizeSqft: number;
   minHours: number;
@@ -30,15 +30,15 @@ export interface StudioDoc {
   images: string[];
   rules: string;
   hostId: string;
-  hostName: string;
-  hostEmail: string;
+  ownerName: string;
+  ownerEmail: string;
   rating: number;
   reviewCount: number;
   createdAt: Date;
   updatedAt: Date;
 }
 
-export type BookingStatus = "pending" | "confirmed" | "declined" | "cancelled";
+export type BookingStatus = "pending" | "confirmed" | "completed" | "declined" | "cancelled";
 
 export interface BookingDoc {
   _id?: ObjectId;
@@ -52,7 +52,7 @@ export interface BookingDoc {
   startHour: number;
   endHour: number;
   hours: number;
-  pricing: { hourlyRate: number; subtotal: number; cleaningFee: number; serviceFee: number; total: number };
+  pricing: { hourlyRate: number; subtotal: number; securityDeposit: number; serviceFee: number; total: number };
   note: string;
   status: BookingStatus;
   createdAt: Date;
@@ -60,3 +60,22 @@ export interface BookingDoc {
 }
 
 export const ACTIVE_STATUSES: BookingStatus[] = ["pending", "confirmed"];
+
+export interface WishlistDoc {
+  _id?: ObjectId;
+  userId: string;
+  studioId: string;
+  createdAt: Date;
+}
+
+export interface ReviewDoc {
+  _id?: ObjectId;
+  studioId: string;
+  userId: string;
+  userName: string;
+  userImage: string | null;
+  rating: number;
+  comment: string;
+  createdAt: Date;
+  updatedAt: Date;
+}

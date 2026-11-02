@@ -1,6 +1,6 @@
 import { Db, MongoClient } from "mongodb";
 import { env } from "./env";
-import type { BookingDoc, StudioDoc } from "../types";
+import type { BookingDoc, ReviewDoc, StudioDoc, WishlistDoc } from "../types";
 
 // Cached across invocations so serverless functions reuse the connection.
 let clientPromise: Promise<MongoClient> | null = null;
@@ -23,6 +23,9 @@ export async function getDb(): Promise<Db> {
       db.collection("bookings").createIndex({ studioId: 1, date: 1, status: 1 }),
       db.collection("bookings").createIndex({ guestId: 1 }),
       db.collection("bookings").createIndex({ hostId: 1 }),
+      db.collection("studios").createIndex({ ownerEmail: 1 }),
+      db.collection("wishlists").createIndex({ userId: 1, studioId: 1 }, { unique: true }),
+      db.collection("reviews").createIndex({ studioId: 1, userId: 1 }, { unique: true }),
     ]).catch(() => (indexesReady = false));
   }
   return db;
@@ -33,6 +36,8 @@ export async function collections() {
   return {
     studios: db.collection<StudioDoc>("studios"),
     bookings: db.collection<BookingDoc>("bookings"),
+    reviews: db.collection<ReviewDoc>("reviews"),
+    wishlists: db.collection<WishlistDoc>("wishlists"),
     users: db.collection("user"),
   };
 }

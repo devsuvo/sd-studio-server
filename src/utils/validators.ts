@@ -10,7 +10,7 @@ const studioBase = z.object({
   city: z.string().trim().min(2).max(60),
   address: z.string().trim().min(5).max(160),
   hourlyRate: z.coerce.number().min(5, "must be at least $5").max(5000),
-  cleaningFee: z.coerce.number().min(0).max(1000),
+  securityDeposit: z.coerce.number().min(0).max(5000),
   capacity: z.coerce.number().int().min(1).max(500),
   sizeSqft: z.coerce.number().int().min(50).max(100000),
   minHours: z.coerce.number().int().min(1).max(12),
@@ -24,7 +24,7 @@ const studioBase = z.object({
 
 // Defaults only apply on create; on update, a missing field means "leave it unchanged".
 const studioCreateBase = studioBase.extend({
-  cleaningFee: studioBase.shape.cleaningFee.default(0),
+  securityDeposit: studioBase.shape.securityDeposit.default(0),
   minHours: studioBase.shape.minHours.default(1),
   amenities: list.default([]),
   equipment: list.default([]),
@@ -56,4 +56,14 @@ export const bookingCreateSchema = z
 
 export const bookingStatusSchema = z.object({
   status: z.enum(["confirmed", "declined", "cancelled"]),
+});
+
+export const reviewSchema = z.object({
+  rating: z.coerce.number().int().min(1, "must be between 1 and 5").max(5, "must be between 1 and 5"),
+  comment: z.string().trim().min(10, "must be at least 10 characters").max(1000),
+});
+
+export const uploadSchema = z.object({
+  // Base64 image, with or without a data: URL prefix. ~7MB of base64 is about a 5MB file.
+  image: z.string().min(100, "image is empty").max(7_000_000, "image must be 5MB or smaller"),
 });
