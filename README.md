@@ -1,6 +1,6 @@
-# StudioSpace API
+# SD Studio API
 
-The Express + MongoDB REST API behind StudioSpace, a peer-to-peer creative studio booking platform.
+The Express + MongoDB REST API behind SD Studio, a peer-to-peer creative studio booking platform.
 
 Authentication is handled by BetterAuth in the Next.js client. The client stores a short-lived JWT in an **HttpOnly cookie** (`ss_token`) and reaches this API through a same-origin proxy, so the cookie is sent with every request. The API verifies the JWT against the client's JWKS endpoint (`<CLIENT_URL>/api/auth/jwks`) and returns **401 Unauthorized** when it's missing or invalid. A `Authorization: Bearer <token>` header also works, for scripts and tools.
 

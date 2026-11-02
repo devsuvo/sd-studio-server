@@ -20,7 +20,7 @@ app.use(
 app.use(express.json({ limit: "8mb" }));
 
 app.get("/", (_req, res) => {
-  res.json({ name: "StudioSpace API", status: "ok", docs: "/api/health" });
+  res.json({ name: "SD Studio API", status: "ok", docs: "/api/health" });
 });
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", time: new Date().toISOString() });
