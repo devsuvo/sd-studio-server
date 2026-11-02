@@ -9,6 +9,15 @@ import { bookingCreateSchema, bookingStatusSchema } from "../utils/validators";
 const router = Router();
 router.use(requireAuth);
 
+/** Confirmed sessions whose date has passed become "completed". Runs before reads so lists stay current. */
+async function markCompleted() {
+  const { bookings } = await collections();
+  await bookings.updateMany(
+    { status: "confirmed", date: { $lt: earliestBookableDate() } },
+    { $set: { status: "completed", updatedAt: new Date() } },
+  );
+}
+
 // POST /api/bookings — reserve a slot after checking hours and overlaps
 router.post(
   "/",
@@ -52,7 +61,7 @@ router.post(
       startHour: input.startHour,
       endHour: input.endHour,
       hours,
-      pricing: quote(studio.hourlyRate, studio.cleaningFee, hours),
+      pricing: quote(studio.hourlyRate, studio.securityDeposit, hours),
       note: input.note,
       status: "pending",
       createdAt: now,
@@ -67,6 +76,7 @@ router.post(
 router.get(
   "/me",
   asyncHandler(async (req, res) => {
+    await markCompleted();
     const { bookings } = await collections();
     const items = await bookings.find({ guestId: req.user!.id }).sort({ date: -1, startHour: -1 }).toArray();
     res.json(items);
@@ -77,6 +87,7 @@ router.get(
 router.get(
   "/host",
   asyncHandler(async (req, res) => {
+    await markCompleted();
     const { bookings } = await collections();
     const items = await bookings.find({ hostId: req.user!.id }).sort({ createdAt: -1 }).toArray();
     res.json(items);
@@ -87,6 +98,7 @@ router.get(
 router.get(
   "/summary",
   asyncHandler(async (req, res) => {
+    await markCompleted();
     const userId = req.user!.id;
     const today = new Date().toISOString().slice(0, 10);
     const { bookings, studios } = await collections();
@@ -94,24 +106,27 @@ router.get(
     const [asGuest, asHost, listings] = await Promise.all([
       bookings.find({ guestId: userId }).project<BookingDoc>({ status: 1, date: 1, pricing: 1 }).toArray(),
       bookings.find({ hostId: userId }).project<BookingDoc>({ status: 1, date: 1, pricing: 1 }).toArray(),
-      studios.countDocuments({ hostId: userId }),
+      studios.countDocuments({ ownerEmail: req.user!.email }),
     ]);
 
-    const sum = (list: BookingDoc[]) => Math.round(list.reduce((t, b) => t + b.pricing.total, 0) * 100) / 100;
+    const sum = (list: BookingDoc[], key: "total" | "subtotal") =>
+      Math.round(list.reduce((t, b) => t + b.pricing[key], 0) * 100) / 100;
+    const paid = (b: BookingDoc) => b.status === "confirmed" || b.status === "completed";
     const active = (b: BookingDoc) => ACTIVE_STATUSES.includes(b.status);
 
     res.json({
       bookings: asGuest.length,
       upcoming: asGuest.filter((b) => active(b) && b.date >= today).length,
-      spent: sum(asGuest.filter((b) => b.status === "confirmed")),
+      spent: sum(asGuest.filter(paid), "total"),
       listings,
       pendingRequests: asHost.filter((b) => b.status === "pending").length,
-      earnings: sum(asHost.filter((b) => b.status === "confirmed")),
+      // Hosts earn the hourly subtotal; the service fee goes to the platform and deposits are refundable.
+      earnings: sum(asHost.filter(paid), "subtotal"),
     });
   }),
 );
 
-// PATCH /api/bookings/:id/status — guests cancel, hosts confirm / decline / cancel
+// PATCH /api/bookings/:id/status — guests cancel pending requests; hosts confirm / decline / cancel
 router.patch(
   "/:id/status",
   asyncHandler(async (req, res) => {
@@ -127,8 +142,11 @@ router.patch(
 
     const allowed: Partial<Record<BookingStatus, BookingStatus[]>> = isHost
       ? { pending: ["confirmed", "declined"], confirmed: ["cancelled"] }
-      : { pending: ["cancelled"], confirmed: ["cancelled"] };
+      : { pending: ["cancelled"] };
 
+    if (isGuest && !isHost && booking.status === "confirmed") {
+      throw new HttpError(400, "Confirmed bookings can only be cancelled by the host. Contact them by email.");
+    }
     if (!allowed[booking.status]?.includes(status)) {
       throw new HttpError(400, `A ${booking.status} booking can't be changed to ${status}.`);
     }
