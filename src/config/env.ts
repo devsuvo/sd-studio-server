@@ -7,6 +7,7 @@ export const env = {
   mongoUri: process.env.MONGODB_URI ?? "",
   dbName: process.env.DB_NAME ?? "studiospace",
   clientUrl: trim(process.env.CLIENT_URL ?? "http://localhost:3000"),
+  imgbbKey: process.env.IMGBB_API_KEY ?? "",
   extraOrigins: (process.env.EXTRA_ORIGINS ?? "")
     .split(",")
     .map((o) => trim(o.trim()))
